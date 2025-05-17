@@ -1,0 +1,101 @@
+#!/usr/bin/env bash
+
+PROJECT_PATH=""
+SESSION_NAME=""
+PROFILE=""
+
+# Get session name from path
+get_session_name_from_path() {
+  basename "$1" | tr ' ' '_' | tr -d '\n'
+}
+
+# Check if session exists
+session_exists() {
+  tmux has-session -t "$1" 2>/dev/null
+}
+
+# Get current directory name
+current_dir_name() {
+  basename "$(pwd)"
+}
+
+# Create dev session
+create_dev_session() {
+  tmux new-session -d -s "$1" -c "$2"
+  tmux rename-window -t "$1":0 nvim
+  tmux new-window -t "$1":1 -n terminal -c "$2"
+  tmux new-window -t "$1":2 -n lazygit -c "$2"
+}
+
+# Create cy session
+create_cy_session() {
+  tmux new-session -d -s "$1"
+  tmux rename-window -t "$1":0 nmap
+  tmux new-window -t "$1":1 -n metasploit
+}
+
+# Default mode: fuzzy search and attach/create
+if [[ -z "$1" ]]; then
+  # Collect directories + resurrect sessions
+  DIRS=$(find ~/projects ~/work -mindepth 1 -maxdepth 1 -type d 2>/dev/null)
+  RESURRECT_FILE="$HOME/.tmux/resurrect/last"
+  if [[ -f "$RESURRECT_FILE" ]]; then
+    RESURRECT_DIRS=$(grep -oP '(?<=^cwd: ).*' "$RESURRECT_FILE" | sort -u)
+  else
+    RESURRECT_DIRS=""
+  fi
+
+  PROJECT_PATH=$(printf "%s\n%s" "$DIRS" "$RESURRECT_DIRS" | fzf)
+
+  if [[ -z "$PROJECT_PATH" ]]; then
+    echo "No project selected."
+    exit 1
+  fi
+
+  SESSION_NAME=$(get_session_name_from_path "$PROJECT_PATH")
+
+  if session_exists "$SESSION_NAME"; then
+    tmux attach -t "$SESSION_NAME"
+  else
+    create_dev_session "$SESSION_NAME" "$PROJECT_PATH"
+    tmux attach -t "$SESSION_NAME"
+  fi
+
+  exit 0
+fi
+
+# Handle --dev flag
+if [[ "$1" == "--dev" ]]; then
+  SESSION_NAME=$(current_dir_name)
+  PROJECT_PATH=$(pwd)
+  if session_exists "$SESSION_NAME"; then
+    echo "Session '$SESSION_NAME' already exists. Attaching..."
+    tmux attach -t "$SESSION_NAME"
+    exit 0
+  fi
+
+  create_dev_session "$SESSION_NAME" "$PROJECT_PATH"
+  tmux attach -t "$SESSION_NAME"
+  exit 0
+fi
+
+# Handle --cy flag
+if [[ "$1" == "--cy" ]]; then
+  SESSION_NAME=$(date +"%Y-%m-%d-%H%M")
+  if session_exists "$SESSION_NAME"; then
+    echo "Session '$SESSION_NAME' already exists. Attaching..."
+    tmux attach -t "$SESSION_NAME"
+    exit 0
+  fi
+
+  create_cy_session "$SESSION_NAME"
+  tmux attach -t "$SESSION_NAME"
+  exit 0
+fi
+
+# Invalid usage
+echo "Usage:"
+echo "  lazymux            # fuzzy switch or create dev session"
+echo "  lazymux --dev      # create dev session in current dir"
+echo "  lazymux --cy       # create cybersecurity session"
+exit 1
