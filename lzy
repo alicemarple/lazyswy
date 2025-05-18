@@ -1,0 +1,174 @@
+#!/usr/bin/env bash
+
+SESSION_FILE="$HOME/.config/tmux/plugins/lazyswy/lazyswy_dir"
+FLAGS_FILE="$HOME/.config/tmux/plugins/lazyswy/lazyswy_flags.toml"
+LAST_FILE="$HOME/.config/tmux/plugins/resurrect/last"
+
+if [[ ! -f "$SESSION_FILE" ]]; then
+  echo "SESSION_FILE does not exist: $SESSION_FILE"
+fi
+if [[ ! -f "$FLAGS_FILE" ]]; then
+  echo "FLAGS_FILE does not exist: $FLAGS_FILE"
+fi
+
+# Check dependencies
+command -v tmux &>/dev/null || {
+  echo "tmux is not installed."
+  exit 1
+}
+command -v fzf &>/dev/null || {
+  echo "fzf is not installed."
+  exit 1
+}
+
+# If -r flag is passed, read saved session names
+if [[ "$1" == "-r" ]]; then
+  if [[ ! -f "$LAST_FILE" ]]; then
+    echo "No resurrect session file found at: $LAST_FILE"
+    exit 1
+  fi
+
+  # Extract unique session names from 'window' and 'pane' lines
+  session_names=$(grep -E '^(pane|window)' "$LAST_FILE" | cut -f2 | sort -u)
+
+  # Use fzf to search and preview sessions
+  selected=$(echo "$session_names" | fzf)
+  if [[ -n "$selected" ]]; then
+    echo "Session exists"
+  else
+    echo "Session is not exists"
+  fi
+  exit 0
+
+fi
+
+declare -A flag_windows
+
+parse_flags_toml() {
+  local flag=""
+  local windows_line=""
+
+  while IFS= read -r line; do
+    # Remove spaces and skip empty lines or comments
+    line=$(echo "$line" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+    [[ -z "$line" || "$line" == \#* ]] && continue
+
+    if [[ "$line" =~ ^flag\ *=\ *\"([^\"]+)\" ]]; then
+      flag="${BASH_REMATCH[1]}"
+    elif [[ "$line" =~ ^windows\ *=\ *\[(.*)\] ]]; then
+      windows_line="${BASH_REMATCH[1]}"
+      windows_line=$(echo "$windows_line" | tr -d '"' | tr ',' ' ')
+      flag_windows["$flag"]="$windows_line"
+    fi
+  done <"$FLAGS_FILE"
+}
+
+[[ -f "$FLAGS_FILE" ]] || {
+  echo "Missing $FLAGS_FILE. Please create it."
+  exit 1
+}
+parse_flags_toml
+
+list_tmux_sessions() {
+  local sessions
+  sessions=$(tmux list-sessions -F "#{session_name}" 2>/dev/null)
+  if [[ -z "$sessions" ]]; then
+    echo "No tmux sessions found."
+    exit 0
+  fi
+  local selected_session
+  selected_session=$(echo "$sessions" | fzf)
+  [[ -z "$selected_session" ]] && exit 0
+
+  if [[ -z "$TMUX" ]]; then
+    exec tmux attach-session -t "$selected_session"
+  else
+    tmux switch-client -t "$selected_session"
+  fi
+  exit 0
+}
+
+# If -l flag is provided, list and switch to tmux sessions
+if [[ "$1" == "-l" ]]; then
+  list_tmux_sessions
+fi
+
+# Collect flags from input
+selected_flags=()
+while [[ $# -gt 0 ]]; do
+  if [[ "${flag_windows[$1]+_}" ]]; then
+    selected_flags+=("$1")
+  else
+    echo "Invalid flag: $1"
+    echo "Valid flags are: ${!flag_windows[@]}"
+    exit 1
+  fi
+  shift
+done
+
+# Fix: load projects from ~/.tmux-sessionizer, list subdirectories recursively
+
+if [[ ! -f "$SESSION_FILE" ]]; then
+  echo "No $SESSION_FILE file found."
+  exit 1
+fi
+
+# Read lines from SESSION_FILE and for each line (project folder), list subdirectories
+list_projects() {
+  local all_dirs=()
+  while IFS= read -r proj_path || [[ -n "$proj_path" ]]; do
+    # Expand tilde to $HOME
+    proj_path="${proj_path/#\~/$HOME}"
+    # Remove trailing slash for consistency
+    proj_path="${proj_path%/}"
+    if [[ -d "$proj_path" ]]; then
+      # Find all subdirectories (1 or 2 levels deep)
+      while IFS= read -r dir; do
+        all_dirs+=("$dir")
+      done < <(find "$proj_path" -mindepth 1 -maxdepth 2 -type d -not -path '*/.git*')
+
+    fi
+  done <"$SESSION_FILE"
+  printf '%s\n' "${all_dirs[@]}"
+}
+
+selected=$(list_projects | fzf)
+# selected=$(list_projects | fzf --prompt="Select project directory: ")
+[[ -z "$selected" ]] && exit 0
+
+session_name=$(basename "$selected" | tr . _)
+
+# If session exists, switch or attach
+if tmux has-session -t "$session_name" 2>/dev/null; then
+  if [[ -z "$TMUX" ]]; then
+    exec tmux attach-session -t "$session_name"
+  else
+    tmux switch-client -t "$session_name"
+  fi
+  exit 0
+fi
+
+# Collect all windows from selected flags
+all_windows=()
+for flag in "${selected_flags[@]}"; do
+  IFS=' ' read -r -a win_array <<<"${flag_windows[$flag]}"
+  all_windows+=("${win_array[@]}")
+done
+
+# Create tmux session and windows
+if [[ ${#all_windows[@]} -gt 0 ]]; then
+  first="${all_windows[0]}"
+  tmux new-session -d -s "$session_name" -n "$first" -c "$selected"
+  for win in "${all_windows[@]:1}"; do
+    tmux new-window -t "$session_name:" -n "$win" -c "$selected"
+  done
+else
+  tmux new-session -d -s "$session_name" -c "$selected"
+fi
+
+# Attach or switch
+if [[ -z "$TMUX" ]]; then
+  exec tmux attach-session -t "$session_name"
+else
+  tmux switch-client -t "$session_name"
+fi

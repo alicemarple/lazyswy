@@ -1,0 +1,14 @@
+[[group]]
+name = "dev"
+flag = "-d"
+windows = ["nvim", "lazygit"]
+
+[[group]]
+name = "cyber"
+flag = "-c"
+windows = ["nmap", "btop", "metasploit"]
+
+[[group]]
+name = "docker"
+flag = "-do"
+windows = ["docker", "btop"]
