@@ -21,27 +21,6 @@ command -v fzf &>/dev/null || {
   exit 1
 }
 
-# If -r flag is passed, read saved session names
-if [[ "$1" == "-r" ]]; then
-  if [[ ! -f "$LAST_FILE" ]]; then
-    echo "No resurrect session file found at: $LAST_FILE"
-    exit 1
-  fi
-
-  # Extract unique session names from 'window' and 'pane' lines
-  session_names=$(grep -E '^(pane|window)' "$LAST_FILE" | cut -f2 | sort -u)
-
-  # Use fzf to search and preview sessions
-  selected=$(echo "$session_names" | fzf)
-  if [[ -n "$selected" ]]; then
-    echo "Session exists"
-  else
-    echo "Session is not exists"
-  fi
-  exit 0
-
-fi
-
 declare -A flag_windows
 
 parse_flags_toml() {
@@ -168,7 +147,7 @@ fi
 
 # Attach or switch
 if [[ -z "$TMUX" ]]; then
-  exec tmux attach-session -t "$session_name"
+  exec tmux attach-session -t "$session_name:1"
 else
-  tmux switch-client -t "$session_name"
+  tmux switch-client -t "$session_name:1"
 fi
